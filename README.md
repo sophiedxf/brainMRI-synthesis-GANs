@@ -1,15 +1,26 @@
-# README — 2D Brain MRI Slice Generation (DCGAN & WGAN-GP; multiple resolutions)
+# 2D Brain MRI Slice Generation (DCGAN & WGAN-GP; multiple resolutions)
 
-This project trains **DCGAN** and **WGAN-GP** to generate **unconditional 2D brain MRI slices** from **BraTS 2023**.
+This project trains and compares **DCGAN** and **WGAN-GP** to generate **unconditional 2D brain MRI slices** from **BraTS 2023**.
 
 Supported resolutions: **64×64**, **128×128**, **256×256**.
 
 Workflow:
 
 1) Preprocess BraTS volumes → packed `.npy` slices  
-2) Train DCGAN and/or WGAN-GP (optionally with EMA)  
+2) Train **DCGAN** and/or **WGAN-GP** (optionally with **EMA**)  
 3) Evaluate with **FID + KID** (TorchMetrics Inception-v3 features)  
-4) Generate synthetic images (`generate.py`)  
+4) Generate synthetic images + grids  
+
+> **Important:** BraTS data is not included in this repo.  
+> **Important:** Inception-based FID/KID are imperfect for MRIs; treat them as **relative** metrics only.
+
+---
+
+## Device (GPU vs CPU)
+
+- All scripts automatically use **GPU (CUDA)** if available; otherwise they run on **CPU**.
+- You can confirm the device from the console output (`Device: cuda` or `Device: cpu`).
+- CPU is supported but will be **much slower**, especially for training and evaluation.
 
 ---
 
@@ -22,114 +33,136 @@ conda create -n dcgan_wgan python=3.10.11 -y
 conda activate dcgan_wgan
 ```
 
-### 0.2 Install dependencies from `requirements.txt`
+### 0.2 Install dependencies
 
-From the repo root (where `requirements.txt` is):
+You have two options:
 
+#### Option A (recommended for local dev): install everything
 ```bat
-pip install -r requirements.txt
+pip install -r requirements_all.txt
 ```
 
-**Verify versions (optional):**
+#### Option B (per-step installs / per Docker image): install only what you need
+Each step folder has its own `requirements.txt`.
 
+Example:
 ```bat
-python -c "import torch, torchvision; print(torch.__version__); print(torchvision.__version__)"
+pip install -r train_wgangp\requirements.txt
+```
+
+> If you use CUDA PyTorch wheels, ensure the requirements file includes the correct PyTorch index (e.g. `--extra-index-url https://download.pytorch.org/whl/cu118`).
+
+---
+
+## 1) Repository structure (new)
+
+```
+repo_root/
+├─ data/                       # NOT committed
+│  ├─ raw/                     # put BraTS2023 here
+│  └─ preprocessed_slices_64/  # produced by preprocessing (or _128/_256)
+├─ runs/                       # NOT committed (checkpoints, samples, logs)
+│
+├─ preprocess/
+│  ├─ preprocess.py
+│  └─ requirements.txt
+│
+├─ train_dcgan/
+│  ├─ train_dcgan.py
+│  ├─ dataset.py
+│  ├─ models_dcgan.py
+│  ├─ utils_training.py
+│  ├─ (optional) config.py
+│  └─ requirements.txt
+│
+├─ train_wgangp/
+│  ├─ train_wgangp.py
+│  ├─ dataset.py
+│  ├─ models_dcgan.py
+│  ├─ models_wgangp.py
+│  ├─ utils_training.py
+│  ├─ (optional) config.py
+│  └─ requirements.txt
+│
+├─ generate/
+│  ├─ generate.py
+│  ├─ models_dcgan.py
+│  ├─ (optional) utils_training.py / config.py
+│  └─ requirements.txt
+│
+├─ evaluate/
+│  ├─ eval_fid_kid.py
+│  ├─ dataset.py
+│  ├─ models_dcgan.py
+│  └─ requirements.txt
+│
+└─ requirements_all.txt
 ```
 
 ---
 
-## 1) Repository structure
+## 2) Download BraTS 2023 data and place it in `data/raw/`
+
+This repository **does not include BraTS data** (and you should not commit it to GitHub).
+
+1. Download BraTS 2023 (licence required).
+2. Extract/unzip locally.
+3. Put the extracted folders under:
 
 ```
-dcgan_wgan/
-├─ data/
-│  ├─ raw/                       # BraTS 2023 goes here
-│  └─ preprocessed_slices_64/     # example output (or _128 / _256)
-├─ runs/
-│  ├─ dcgan_64/
-│  └─ wgangp_64/
-└─ src/
-   ├─ preprocess.py
-   ├─ dataset.py
-   ├─ models_dcgan.py
-   ├─ models_wgangp.py
-   ├─ utils_training.py
-   ├─ train_dcgan.py
-   ├─ train_wgangp.py
-   ├─ eval_fid_kid.py            # your current eval script
-   └─ generate.py
+data/raw/
 ```
 
----
+The preprocessing script searches **recursively**, so nested folders are fine as long as the NIfTI files exist somewhere under `data/raw/`.
 
-## 1.5) Download BraTS 2023 data and place it in `data/raw/`
-
-This repository **does not include any BraTS data**.  
-Before running preprocessing, you must:
-
-1. **Download BraTS 2023** (licence required) from the official source.
-2. **Unzip/extract** the dataset locally.
-3. Copy/move the extracted BraTS folders into:
-
-```
-dcgan_wgan/data/raw/
-```
-
-The preprocessing script searches **recursively**, so your `data/raw/` can contain one or more nested folders as long as the NIfTI files are inside somewhere, for example:
-
+Expected modality filename suffixes (BraTS GLI naming):
 - `...-t1n.nii.gz`
 - `...-t1c.nii.gz`
 - `...-t2w.nii.gz`
 - `...-t2f.nii.gz`
 
-If `preprocess.py` reports “No files found”, double‑check:
-- you placed the dataset under `data/raw/` (not a different folder), and
-- the modality suffixes match your BraTS filenames.
+If preprocessing reports “No files found”, check:
+- you used `--raw_dir data/raw`
+- your dataset naming matches the expected suffixes
 
 ---
 
-## 2) Preprocessing — `src/preprocess.py`
+## 3) Preprocessing — `preprocess/preprocess.py`
 
-Converts BraTS NIfTI volumes into a **single packed `.npy`** file of slices.
+Converts 3D BraTS NIfTI volumes into a **single packed `.npy`** file of slices.
 
-### Key outputs
-- Packed slices: `.../brats2023_<modality>_<size>_packed.npy`
-- Values are in **[-1, 1]**
-- Background is set to **-1** (black when visualised)
+**Outputs**
+- `data/preprocessed_slices_<size>/brats2023_<modality>_<size>_packed.npy`
+- slices are float32 in **[-1, 1]**, background ≈ **-1**
 
-### Parameters
+### Key parameters (what they do + suggestions)
 
 **Core**
-- `--raw_dir` *(required)*: where BraTS is stored (use `data/raw`)
-- `--out_dir` *(required)*: output directory for packed data (e.g. `data/preprocessed_slices_64`)
-- `--modality` *(required)*: which modality to extract (`t2f` (FLAIR), `t2w` (T2), `t1c` (T1ce), `t1n` (T1))
-- `--target_size` *(required)*: `64 | 128 | 256`  
-  - **64**: fastest iteration  
-  - **128**: better detail, still manageable  
-  - **256**: hardest, most compute
+- `--raw_dir` *(required)*: root folder containing BraTS, e.g. `data/raw`
+- `--out_dir`: output folder, e.g. `data/preprocessed_slices_64`
+- `--modality`: `t1n | t1c | t2w | t2f` (aliases: `t1`, `t1ce`, `t2`, `flair`)
+- `--target_size`: `64 | 128 | 256`  
+  Suggestion: start with **64** first.
 
 **Slice selection**
-- `--min_foreground`: minimum foreground pixel count (filters near-empty slices)  
-  - Suggestion: start with **500**, adjust if too many empty slices remain.
-- `--max_slices_per_patient`: cap slices per patient (0 = no cap)  
-  - Use this to reduce bias from patients with many valid slices.
-- `--target_total_slices`: stop early after writing N slices (0 = no cap)  
-  - Great for quick experiments (e.g. **10k** slices).
+- `--min_foreground`: filters nearly-empty slices  
+  Suggestion: start at **500**, then tune.
+- `--max_slices_per_patient`: cap per patient (0 = no cap)
+- `--target_total_slices`: stop after N slices total (0 = no cap)  
+  Suggestion: **10000** for fast experiments.
 - `--selection`: `topk_foreground | uniform | random`  
-  - `topk_foreground`: best quality slices, least background  
-  - `uniform`: evenly distributed anatomy  
-  - `random`: best diversity but includes more low-signal slices
-- `--seed`: makes sampling reproducible
+  Suggestion: `topk_foreground` for higher-quality slices.
+- `--seed`: makes selection reproducible
 
-**Debug/preview**
-- `--save_png_samples`: save occasional PNG previews (recommended early on)
-- `--png_every_n_patients`: e.g. 50
-- `--png_max_per_patient`: e.g. 8
+**Optional PNG previews**
+- `--save_png_samples`
+- `--png_every_n_patients`
+- `--png_max_per_patient`
 
-### Example: preprocess 64×64 T2f (FLAIR) to ~10k slices
+### Example command (64×64, T2f, ~10k slices)
 
 ```bat
-python src\preprocess.py ^
+python preprocess\preprocess.py ^
   --raw_dir data\raw ^
   --out_dir data\preprocessed_slices_64 ^
   --modality t2f ^
@@ -143,61 +176,50 @@ python src\preprocess.py ^
 
 ---
 
-## 3) Training DCGAN — `src/train_dcgan.py`
+## 4) Train DCGAN — `train_dcgan/train_dcgan.py`
 
-DCGAN with:
-- TTUR (different LR for G and D)
-- optional AMP (recommended)
-- optional EMA (recommended for cleaner samples + stabler evaluation)
+DCGAN training supports:
+- TTUR (separate LR for G and D)
+- AMP (faster on CUDA)
+- EMA (cleaner samples / often better FID/KID)
 
-### Parameters
+### Key parameters (what they do + suggestions)
 
-**Data/run**
-- `--data_dir`: must match the size you preprocessed
-- `--out_dir`: where checkpoints/samples go
-- `--image_size`: must match dataset (`64/128/256`)
-- `--seed`: reproducibility
+**Data**
+- `--data_dir`: directory containing the packed dataset file
+- `--out_dir`: output run folder for checkpoints/samples
+- `--image_size`: must match preprocessing size (`64/128/256`)
+- `--seed`
 
 **Model**
-- `--z_dim`: latent size (typical: **128**)  
-  - Larger can help diversity but may slow training slightly.
-- `--ngf`: generator base channels (typical: **64**)  
-  - Increase for quality, decrease for speed/VRAM.
-- `--ndf`: discriminator base channels (typical: **64**)  
-  - Similar tradeoff to `ngf`.
+- `--z_dim`: latent dim (typical: **128**)
+- `--ngf`, `--ndf`: channel multipliers (typical: **64**)  
+  Increase for quality, decrease for speed/VRAM.
 
 **Optimisation**
-- `--epochs`: training length  
-- `--batch_size`: try as large as VRAM allows  
-- `--lrG`, `--lrD`: TTUR rates  
-  - Often `lrG > lrD` works well.
-- `--beta1`, `--beta2`: Adam betas  
-  - Standard DCGAN often uses `beta1=0.5, beta2=0.999`.
+- `--epochs`
+- `--batch_size`
+- `--lrG`, `--lrD`
+- `--beta1`, `--beta2`
 
 **AMP**
-- `--use_amp`: faster training on RTX GPUs  
-- `--no_amp`: disable if you see instability
+- `--use_amp` / `--no_amp`  
+  Suggestion: enable AMP on GPU unless you see instability.
 
 **EMA**
-- `--ema`: enable EMA tracking  
-- `--ema_beta`: smoothing factor  
-  - **0.999** for 64/128; **0.9995** can help at 256.
-- `--ema_start_epoch`: when EMA starts  
-  - Usually **1** is fine.
+- `--ema`
+- `--ema_beta` (try **0.999**; for 256 try **0.9995**)
+- `--ema_start_epoch` (usually **1**)
 
-**Saving**
-- `--save_samples_every`: sample grid frequency (e.g. 5 or 10)
-- `--save_ckpt_every`: checkpoint frequency (e.g. 10)
-- `--sample_grid_n`: number of samples in the training grid
-- `--sample_grid_nrow`: grid columns
+**Saving / resume**
+- `--save_samples_every`
+- `--save_ckpt_every`
+- `--resume <checkpoint_path>`
 
-**Resume**
-- `--resume`: checkpoint path
-
-### Example: DCGAN 64×64
+### Example command (DCGAN 64×64)
 
 ```bat
-python src\train_dcgan.py ^
+python train_dcgan\train_dcgan.py ^
   --data_dir data\preprocessed_slices_64 ^
   --out_dir runs\dcgan_64 ^
   --image_size 64 ^
@@ -207,50 +229,38 @@ python src\train_dcgan.py ^
   --lrD 2e-4 ^
   --use_amp ^
   --ema ^
-  --ema_beta 0.999 ^
-  --ema_start_epoch 1
+  --ema_beta 0.999
 ```
 
 ---
 
-## 4) Training WGAN-GP — `src/train_wgangp.py`
+## 5) Train WGAN-GP — `train_wgangp/train_wgangp.py`
 
-### Parameters
+WGAN-GP is usually more stable than DCGAN and often produces better samples.
 
-**Core**
-- `--data_dir`, `--out_dir`, `--image_size`, `--seed` as above
-
-**Model**
-- `--z_dim`, `--ngf`, `--ndf` as above
+### Key parameters (what they do + suggestions)
 
 **Optimisation**
-- `--epochs`, `--batch_size`
-- `--lr`: WGAN-GP commonly uses **1e-4**
-- `--beta1`, `--beta2`: commonly `0.0, 0.9`
-- `--n_critic`: critic steps per generator step  
-  - Typical: **5**  
-  - Increasing improves critic strength but slows training linearly.
+- `--lr` (common: **1e-4**)
+- `--beta1 0.0 --beta2 0.9` (common WGAN-GP setting)
+- `--n_critic`: critic updates per generator update  
+  Typical: **5** (higher = slower).
 - `--lambda_gp`: gradient penalty coefficient  
-  - Typical: **10**  
-  - Too high can over-regularise; too low can destabilise.
+  Typical: **10**.
 
-**Gradient penalty frequency**
-- `--gp_every`: compute GP every N critic steps  
+**Speed knob**
+- `--gp_every`: compute gradient penalty every N critic steps  
   - `1` = every critic step (most accurate, slowest)  
-  - `2` or `4` = faster with small quality tradeoff  
-  - Suggestion: start with **1**, then try **2** if training is too slow.
-
-**AMP**
-- Usually **OFF** for WGAN-GP (GP can be numerically sensitive)
-- `--use_amp` exists but only enable if you know it’s stable.
+  - `2` or `4` = faster  
+  Suggestion: start with **1**, then try **2** if training is too slow.
 
 **EMA**
-- same idea as DCGAN: cleaner samples + better evaluation stability
+- `--ema`, `--ema_beta`, `--ema_start_epoch` (same idea as DCGAN)
 
-### Example: WGAN-GP 64×64 (faster GP)
+### Example command (WGAN-GP 64×64, faster GP)
 
 ```bat
-python src\train_wgangp.py ^
+python train_wgangp\train_wgangp.py ^
   --data_dir data\preprocessed_slices_64 ^
   --out_dir runs\wgangp_64 ^
   --image_size 64 ^
@@ -265,46 +275,26 @@ python src\train_wgangp.py ^
 
 ---
 
-## 5) Evaluation (FID + KID) — `src/eval_fid_kid.py`
+## 6) Evaluate FID/KID — `evaluate/eval_fid_kid.py`
 
-- Uses **TorchMetrics Inception-v3 (ImageNet) features**  
-- Reports **FID and KID**  
-- Works with checkpoints containing `G` and optionally `G_ema`
+Computes FID + KID using **TorchMetrics Inception-v3 (ImageNet)** features.
 
-### Parameters
+### Key parameters (what they do + suggestions)
 
-**Inputs**
-- `--ckpt` *(required)*: checkpoint `.pt`
-- `--data_dir` *(required)*: preprocessed slice directory (contains test split)
+- `--ckpt` *(required)*
+- `--data_dir` *(required)*
+- `--num_real`, `--num_fake`  
+  Suggestion: **2000** for quick comparisons; increase to 5k/10k for more stable estimates.
+- `--batch_size`
+- `--use_ema` / `--no_ema`  
+  Suggestion: report both raw and EMA, or use EMA as primary.
+- `--kid_subset_size`  
+  Suggestion: **1000** (must be ≤ num_real and num_fake).
 
-**Counts**
-- `--num_real`: number of real images from test set  
-  - Typical: **2000**
-  - Higher = more stable estimates but slower.
-- `--num_fake`: generated samples  
-  - Match `num_real` for fairness.
-- `--batch_size`: evaluation batch size  
-  - Use as high as VRAM allows (32 is safe).
-
-**Performance**
-- `--num_workers`: dataloader workers  
-  - 2–8 depending on CPU.
-- `--pin_memory`: usually helps on CUDA
-
-**EMA**
-- `--use_ema`: evaluate with EMA generator if available  
-  - Suggested for reporting if you trained EMA.
-- `--no_ema`: force raw generator
-
-**KID**
-- `--kid_subset_size`: subset size used internally by TorchMetrics KID  
-  - Must be ≤ `num_real` and `num_fake`
-  - Suggestion: use **1000** for speed; increase if you increase `num_real/num_fake`.
-
-### Example: evaluate WGAN-GP EMA with 2k/2k
+### Example command (EMA, 2k/2k)
 
 ```bat
-python src\eval_fid_kid.py ^
+python evaluate\eval_fid_kid.py ^
   --data_dir data\preprocessed_slices_64 ^
   --ckpt runs\wgangp_64\checkpoint_latest.pt ^
   --num_real 2000 ^
@@ -316,37 +306,29 @@ python src\eval_fid_kid.py ^
 
 ---
 
-## 6) Generation — `src/generate.py`
+## 7) Generate images — `generate/generate.py`
 
-Generates images from a checkpoint (DCGAN or WGAN-GP).
+Generates synthetic images from a checkpoint and optionally saves:
+- a grid PNG
+- individual PNGs
+- a packed `.npy`
 
-### Parameters (with guidance)
+### Key parameters (what they do + suggestions)
 
-**Inputs**
 - `--ckpt` *(required)*
 - `--out_dir`
-- `--seed`
+- `--num`, `--batch_size`, `--seed`
+- `--use_ema` / `--no_ema`
+- `--save_grid` + `--grid_nrow`
+- `--grid_px` (sets final grid resolution, e.g. **1600×1600**)
+- `--save_individual`
+- `--save_npy`
+- `--tag` (adds a label into filenames)
 
-**How many**
-- `--num`: number of samples to generate
-- `--batch_size`: generation batch size
-
-**EMA**
-- `--use_ema`: recommended if you trained EMA
-- `--no_ema`: force raw generator
-
-**Outputs**
-- `--save_grid`: save a single grid image
-- `--grid_nrow`: columns in grid (e.g. 8)
-- `--grid_px`: set final grid image to exact pixel size (e.g. 1600 → 1600×1600)
-- `--save_individual`: save individual PNGs
-- `--save_npy`: save a packed `.npy` of generated slices
-- `--tag`: optional name tag for output filenames
-
-### Example: save 8×8 grid at 1600×1600 using EMA
+### Example command (1600×1600 grid)
 
 ```bat
-python src\generate.py ^
+python generate\generate.py ^
   --ckpt runs\wgangp_64\checkpoint_latest.pt ^
   --out_dir runs\generated\wgangp_64 ^
   --num 64 ^
@@ -360,21 +342,10 @@ python src\generate.py ^
 
 ---
 
-## 7) Practical tips
+## Notes / Good practice
 
-### Choosing resolution
-- Start with **64×64** to validate everything quickly.
-- Move to **128×128** once your pipeline is stable.
-- Use **256×256** last (hardest).
-
-### Using EMA
-- EMA tends to give **cleaner samples** and **better FID/KID stability**.
-- If you report results, it’s reasonable to report **both**:
-  - “raw G” metrics
-  - “EMA G” metrics (often better)
-
-## Device (GPU vs CPU)
-- All scripts automatically choose **GPU (CUDA)** if available; otherwise they fall back to **CPU**.
-- You can verify which device is used by checking the printed line `Device: cuda` or `Device: cpu`.
-- Running on CPU is supported but will be **significantly slower** for training and evaluation.
-
+- Keep `data/` and `runs/` out of GitHub (use `.gitignore`).
+- Always match preprocessing size ↔ training `--image_size`.
+- For reporting:
+  - compare DCGAN vs WGAN-GP under identical preprocessing + evaluation settings
+  - consider reporting both raw `G` and `G_ema`
