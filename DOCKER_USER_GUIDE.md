@@ -130,19 +130,19 @@ Computes FID + KID using TorchMetrics Inception-v3 features.
 
 **Image**: `ghcr.io/sydgep/docker-images/brats_evaluate`
 
-### Example Command (EMA, 2k/2k)
+### Example Command
+To evaluate the latest checkpoint using 2000 real and 2000 fake samples (using EMA weights):
 ```bash
-docker run --rm --gpus all \
+docker run -it --rm \
   -v ./data:/app/data \
   -v ./runs:/app/runs \
-  ghcr.io/sydgep/docker-images/brats_evaluate \
-  python evaluate/eval_fid_kid.py \
+  ghcr.io/sydgep/docker-images/brats_evaluate:latest \
+  python evaluate/eval_fid.py \
     --data_dir data/preprocessed_slices_64 \
     --ckpt runs/wgangp_64/checkpoint_latest.pt \
     --num_real 2000 \
     --num_fake 2000 \
     --batch_size 32 \
-    --use_ema \
     --kid_subset_size 1000
 ```
 

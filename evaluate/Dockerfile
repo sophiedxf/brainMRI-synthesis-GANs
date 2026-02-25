@@ -13,4 +13,4 @@ COPY . .
 
 # Default command from README
 # Mappings will be expected as volumes: -v ./data:/app/data -v ./runs:/app/runs
-CMD ["python", "evaluate/eval_fid_kid.py", "--data_dir", "data/preprocessed_slices_64", "--ckpt", "runs/wgangp_64/checkpoint_latest.pt", "--num_real", "2000", "--num_fake", "2000", "--batch_size", "32", "--use_ema", "--kid_subset_size", "1000"]
+CMD ["python", "evaluate/eval_fid.py", "--data_dir", "data/preprocessed_slices_64", "--ckpt", "runs/wgangp_64/checkpoint_latest.pt", "--num_real", "2000", "--num_fake", "2000", "--batch_size", "32", "--use_ema", "--kid_subset_size", "1000"]
