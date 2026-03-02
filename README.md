@@ -286,7 +286,7 @@ python train_wgangp\train_wgangp.py ^
 
 Computes FID + KID using **TorchMetrics Inception-v3 (ImageNet)** features.
 
-### Key parameters (what they do + suggestions)
+### Key parameters
 
 - `--ckpt` *(required)*: path to the GAN checkpoint (`.pt`) containing `G` (and optionally `G_ema`)
 - `--data_dir` *(required)*: directory containing the preprocessed dataset used for real samples
@@ -321,7 +321,7 @@ Generates synthetic images from a checkpoint and optionally saves:
 - individual PNGs
 - a packed `.npy`
 
-### Key parameters (what they do + suggestions)
+### Key parameters
 
 - `--ckpt` *(required)*: path to the trained checkpoint (`.pt`) to load the generator from
 - `--out_dir`: output directory to save generated files (PNGs and/or `.npy`)
