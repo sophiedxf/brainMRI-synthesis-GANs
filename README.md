@@ -3,6 +3,7 @@
 This project trains a **DCGAN** and a **WGAN-GP** to generate **synthetic 2D brain MRI slices** from **BraTS 2023** dataset, with the flexibility of multiple image resolutions and MRI modalities.
 
 Supported resolutions: **64×64**, **128×128**, **256×256**.
+
 Supported MRI modalities: T1-weighted (t1n), post-contrast T1-weighted (t1c), T2-weighted (t2w), T2 Fluid Attenuated Inversion Recovery (t2f).
 
 Workflow:
