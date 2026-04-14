@@ -6,16 +6,22 @@ Supported resolutions: **64×64**, **128×128**, **256×256**.
 
 Supported MRI modalities: T1-weighted (t1n), post-contrast T1-weighted (t1c), T2-weighted (t2w), T2 Fluid Attenuated Inversion Recovery (t2f).
 
+Below is an example showing the model’s inference output (WGAN-GP, 64×64):
+
+<p align="center"> <img src="grid_G_ema_64_1600px.png" width="600"> </p>
+
+<p align="center">
+  <em>
+    An example of the model’s inference output (WGAN-GP, 64×64).
+  </em>
+</p>
+
 Workflow:
 
 1) Preprocess BraTS volumes → packed `.npy` slices  
 2) Train **DCGAN** and/or **WGAN-GP** (optionally with **EMA**)  
 3) Evaluate with **FID + KID** (TorchMetrics Inception-v3 features)  
 4) Generate synthetic images + grids  
-
-Below is an example showing the model’s inference output (WGAN-GP, 64×64):
-
-<p align="center"> <img src="grid_G_ema_64_1600px.png" width="600"> </p>
 
 ---
 
