@@ -1,6 +1,6 @@
-# Synthetic Brain MRI Scan Generation with GANs
+# Synthetic Brain MRI Images Generation with Customised GANs
 
-This project trains a **DCGAN** and a **WGAN-GP** to generate **synthetic 2D brain MRI slices** from **BraTS 2023** dataset, with the flexibility of multiple image resolutions and MRI modalities.
+This project builds and trains a **DCGAN** and a **WGAN-GP** to generate **synthetic 2D brain MRI slices** from **BraTS 2023** dataset, with the flexibility of choosing multiple image resolutions and MRI modalities.
 
 Supported resolutions: **64×64**, **128×128**, **256×256**.
 
