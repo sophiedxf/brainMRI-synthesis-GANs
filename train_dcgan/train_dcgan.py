@@ -1,6 +1,7 @@
 import os
 import time
 import argparse
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -8,6 +9,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 import matplotlib.pyplot as plt
+from PIL import Image
 
 from dataset import BraTSSliceDataset
 from models_dcgan import DCGANGenerator, DCGANDiscriminator
@@ -55,6 +57,9 @@ CONFIG = {
     "sample_grid_nrow": 4,
     "save_samples_every": 5,
     "save_ckpt_every": 10,
+    "save_progress_every": 1,
+    "progress_use_ema": True,
+    "progress_gif_filename": "generator_progression.gif",
 
     # Output files
     "loss_curve_filename": "loss_curves.png",
@@ -105,6 +110,24 @@ def ema_update(ema_model: torch.nn.Module, model: torch.nn.Module, beta: float):
         b_ema.copy_(b)
 
 
+def save_progress_animation_gif(frames_dir: str, out_path: str, duration_ms: int = 800):
+    frame_paths = sorted(Path(frames_dir).glob("epoch_*.png"))
+    if len(frame_paths) == 0:
+        return
+
+    frames = [Image.open(p).convert("P", palette=Image.ADAPTIVE) for p in frame_paths]
+    first, rest = frames[0], frames[1:]
+    first.save(
+        out_path,
+        save_all=True,
+        append_images=rest,
+        duration=duration_ms,
+        loop=0,
+    )
+    for frame in frames:
+        frame.close()
+
+
 def parse_args():
     p = argparse.ArgumentParser()
 
@@ -145,6 +168,9 @@ def parse_args():
     p.add_argument("--save_ckpt_every", type=int, default=CONFIG["save_ckpt_every"])
     p.add_argument("--sample_grid_n", type=int, default=CONFIG["sample_grid_n"])
     p.add_argument("--sample_grid_nrow", type=int, default=CONFIG["sample_grid_nrow"])
+    p.add_argument("--save_progress_every", type=int, default=CONFIG["save_progress_every"])
+    p.add_argument("--progress_use_ema", action="store_true", default=CONFIG["progress_use_ema"])
+    p.add_argument("--no_progress_use_ema", action="store_true", default=False, help="Use raw G instead of EMA for progression animation")
 
     # Resume
     p.add_argument("--resume", type=str, default="", help="Path to checkpoint_epoch_XXXX.pt to resume from")
@@ -168,6 +194,8 @@ def _warn_if_mismatch(args, ckpt: dict):
 def train(args):
     if args.image_size not in VALID_IMAGE_SIZES:
         raise ValueError(f"--image_size must be one of {sorted(VALID_IMAGE_SIZES)}")
+    if args.save_progress_every < 1:
+        raise ValueError("--save_progress_every must be >= 1")
 
     device = get_device()
 
@@ -184,6 +212,8 @@ def train(args):
 
     os.makedirs(args.out_dir, exist_ok=True)
     set_seed(args.seed)
+    progress_frames_dir = os.path.join(args.out_dir, "progress_frames")
+    progress_gif_path = os.path.join(args.out_dir, CONFIG["progress_gif_filename"])
 
     # Dataset / loader
     ds = BraTSSliceDataset(args.data_dir, split="train", seed=args.seed)
@@ -362,6 +392,17 @@ def train(args):
             save_loss_curves(args.out_dir, epoch_list, lossD_hist, lossG_hist, CONFIG["loss_curve_filename"])
 
         t_plot = time.time()
+
+        if (epoch % args.save_progress_every) == 0:
+            G_progress = G
+            if (not args.no_progress_use_ema) and args.progress_use_ema and args.ema and (G_ema is not None):
+                G_progress = G_ema
+            G_progress.eval()
+            with torch.no_grad():
+                progress_samples = G_progress(fixed_noise).cpu()
+            progress_frame_path = os.path.join(progress_frames_dir, f"epoch_{epoch:04d}.png")
+            save_sample_grid(progress_samples, progress_frame_path, nrow=args.sample_grid_nrow)
+            save_progress_animation_gif(progress_frames_dir, progress_gif_path)
 
         # Save samples every N epochs (use EMA generator if enabled)
         if epoch % args.save_samples_every == 0:

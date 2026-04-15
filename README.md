@@ -130,10 +130,12 @@ If preprocessing reports “No files found”, check:
 
 ## 3) Preprocessing — `preprocess/preprocess.py`
 
-Converts 3D BraTS NIfTI volumes into a **single packed `.npy`** file of slices.
+Converts 3D BraTS NIfTI volumes into a packed slice array plus metadata for patient-level splitting.
 
 **Outputs**
 - `data/preprocessed_slices_<size>/brats2023_<modality>_<size>_packed.npy`
+- `data/preprocessed_slices_<size>/brats2023_<modality>_<size>_packed_metadata.npz`
+- metadata stores the patient ID for each packed slice so train/val/test splits happen at the patient level
 - slices are float32 in **[-1, 1]**, background ≈ **-1**
 
 ### Key parameters
@@ -141,6 +143,7 @@ Converts 3D BraTS NIfTI volumes into a **single packed `.npy`** file of slices.
 **Core**
 - `--raw_dir` *(required)*: root folder containing BraTS, e.g. `data/raw`
 - `--out_dir`: output folder, e.g. `data/preprocessed_slices_64`
+- `--metadata_out`: optional metadata sidecar path; default is derived from `--packed_out`
 - `--modality`: `t1n | t1c | t2w | t2f` (aliases: `t1`, `t1ce`, `t2`, `flair`)
 - `--target_size`: `64 | 128 | 256`  
   Suggestion: start with **64** first.
@@ -182,7 +185,7 @@ python preprocess\preprocess.py ^
 ### Key parameters
 
 **Data**
-- `--data_dir`: directory containing the packed dataset file
+- `--data_dir`: directory containing the packed dataset file and matching metadata sidecar
 - `--out_dir`: output run folder for checkpoints/samples
 - `--image_size`: must match preprocessing size (`64/128/256`)
 - `--seed`
@@ -209,6 +212,8 @@ python preprocess\preprocess.py ^
 
 **Saving / resume**
 - `--save_samples_every`
+- `--save_progress_every`: saves a fixed-noise frame for the generator and updates `generator_progression.gif`
+- `--progress_use_ema` / `--no_progress_use_ema`: choose whether the progression animation uses EMA G or raw G
 - `--save_ckpt_every`
 - `--resume <checkpoint_path>`
 
@@ -224,6 +229,7 @@ python train_dcgan\train_dcgan.py ^
   --lrG 4e-4 ^
   --lrD 2e-4 ^
   --use_amp ^
+  --save_progress_every 1 ^
   --ema ^
   --ema_beta 0.999
 ```
@@ -272,6 +278,7 @@ python train_wgangp\train_wgangp.py ^
 ## 6) Evaluate FID/KID — `evaluate/eval_fid_kid.py`
 
 Computes FID + KID using **TorchMetrics Inception-v3 (ImageNet)** features.
+The evaluation loader uses the same patient-level split metadata as training, so real test slices come only from held-out patients.
 
 ### Key parameters (what they do + suggestions)
 

@@ -138,6 +138,22 @@ def _load_and_prepare_volume(nifti_path: str) -> np.ndarray:
     return vol
 
 
+def _metadata_out_path_from_packed_path(packed_out_path: str) -> str:
+    root, _ = os.path.splitext(packed_out_path)
+    return f"{root}_metadata.npz"
+
+
+def _extract_patient_id(nifti_path: str) -> str:
+    parent = os.path.basename(os.path.dirname(nifti_path))
+    if parent:
+        return parent
+
+    base = os.path.basename(nifti_path)
+    if base.endswith(".nii.gz"):
+        return base[:-7]
+    return os.path.splitext(base)[0]
+
+
 def count_total_slices(
     paths: list[str],
     target_total_slices: int | None,
@@ -167,6 +183,7 @@ def count_total_slices(
 def write_packed_slices(
     paths: list[str],
     packed_out_path: str,
+    metadata_out_path: str,
     target_size: int,
     total_slices: int,
     target_total_slices: int | None,
@@ -180,6 +197,7 @@ def write_packed_slices(
     png_max_per_patient: int,
 ):
     os.makedirs(os.path.dirname(packed_out_path) or ".", exist_ok=True)
+    os.makedirs(os.path.dirname(metadata_out_path) or ".", exist_ok=True)
 
     arr = np.lib.format.open_memmap(
         packed_out_path,
@@ -187,6 +205,8 @@ def write_packed_slices(
         dtype=np.float32,
         shape=(total_slices, target_size, target_size),
     )
+    slice_patient_ids: list[str] = []
+    slice_z_indices = np.empty(total_slices, dtype=np.int32)
 
     write_idx = 0
     for patient_index, p in enumerate(tqdm(paths, desc="Pass 2/2: writing packed array")):
@@ -205,6 +225,7 @@ def write_packed_slices(
             continue
 
         base = os.path.basename(p).replace(".nii.gz", "")
+        patient_id = _extract_patient_id(p)
         do_png = save_png_samples and png_every_n_patients > 0 and (patient_index % png_every_n_patients == 0)
         png_saved = 0
 
@@ -245,6 +266,8 @@ def write_packed_slices(
             sl_resized[bg_mask_resized] = -1.0
 
             arr[write_idx] = sl_resized
+            slice_patient_ids.append(patient_id)
+            slice_z_indices[write_idx] = int(z)
             write_idx += 1
 
             if do_png and png_saved < max(0, png_max_per_patient):
@@ -253,6 +276,11 @@ def write_packed_slices(
                 png_saved += 1
 
     arr.flush()
+    np.savez_compressed(
+        metadata_out_path,
+        slice_patient_ids=np.asarray(slice_patient_ids, dtype=np.str_),
+        slice_z_indices=slice_z_indices[:write_idx],
+    )
     return write_idx
 
 
@@ -263,12 +291,13 @@ def main():
     parser.add_argument("--target_size", type=int, required=True)
     parser.add_argument("--min_foreground", type=int, default=500)
 
-    parser.add_argument("--max_slices_per_patient", type=int, default=0)
-    parser.add_argument("--target_total_slices", type=int, default=0)
+    parser.add_argument("--max_slices_per_patient", type=int, default=50)
+    parser.add_argument("--target_total_slices", type=int, default=5000)
     parser.add_argument("--selection", type=str, default="topk_foreground", choices=["topk_foreground", "uniform", "random"])
     parser.add_argument("--seed", type=int, default=42)
 
     parser.add_argument("--packed_out", type=str, default="")
+    parser.add_argument("--metadata_out", type=str, default="")
     parser.add_argument("--out_dir", type=str, required=True)
 
     parser.add_argument("--save_png_samples", action="store_true")
@@ -291,6 +320,8 @@ def main():
 
     if args.packed_out.strip() == "":
         args.packed_out = os.path.join(args.out_dir, f"brats2023_{args.modality.lower()}_{args.target_size}_packed.npy")
+    if args.metadata_out.strip() == "":
+        args.metadata_out = _metadata_out_path_from_packed_path(args.packed_out)
 
     paths = find_modality_files(args.raw_dir, args.modality)
     if len(paths) == 0:
@@ -314,6 +345,7 @@ def main():
     written = write_packed_slices(
         paths=paths,
         packed_out_path=args.packed_out,
+        metadata_out_path=args.metadata_out,
         target_size=args.target_size,
         total_slices=total_slices,
         target_total_slices=target_total_slices,
@@ -329,6 +361,7 @@ def main():
 
     print(f"\nDone. Packed slices written: {written}")
     print(f"Packed .npy file: {args.packed_out}")
+    print(f"Metadata file: {args.metadata_out}")
     if args.save_png_samples:
         print(f"PNG samples directory: {args.png_dir}")
 

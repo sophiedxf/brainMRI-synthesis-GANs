@@ -1,5 +1,5 @@
-import os
 import glob
+import os
 from typing import Tuple
 
 import numpy as np
@@ -9,16 +9,20 @@ from torch.utils.data import Dataset
 
 class BraTSSliceDataset(Dataset):
     """
-    Dataset for a SINGLE packed .npy file containing all slices.
+    Dataset for a single packed .npy file containing all slices.
 
     Expected directory layout:
       data_dir/
-        <exactly one> *.npy   (packed array)
+        <exactly one> *.npy         (packed slice array)
+        <matching> *_metadata.npz   (slice-to-patient mapping)
 
     Packed file format:
       - dtype: float32 (recommended)
       - shape: (N, H, W)
       - value range: [-1, 1]
+
+    Metadata format:
+      - slice_patient_ids: array of shape (N,)
 
     Returns:
       - torch.Tensor of shape (1, H, W), dtype float32
@@ -53,6 +57,7 @@ class BraTSSliceDataset(Dataset):
             )
 
         self.data_path = npy_files[0]
+        self.metadata_path = os.path.splitext(self.data_path)[0] + "_metadata.npz"
         self.split = split
         self.seed = int(seed)
         self.train_ratio = float(train_ratio)
@@ -66,7 +71,7 @@ class BraTSSliceDataset(Dataset):
         if self.train_ratio + self.val_ratio >= 1:
             raise ValueError("train_ratio + val_ratio must be < 1")
 
-        # Memory-map for fast random access + low RAM
+        # Memory-map for fast random access + low RAM.
         self._packed = np.load(self.data_path, mmap_mode="r" if self.mmap else None)
 
         if self._packed.ndim != 3:
@@ -76,24 +81,52 @@ class BraTSSliceDataset(Dataset):
 
         self.n_total, self.H, self.W = self._packed.shape
 
-        # Deterministic split
+        if not os.path.isfile(self.metadata_path):
+            raise RuntimeError(
+                "Patient-level splitting requires the preprocessing metadata sidecar.\n"
+                f"Expected metadata file: {self.metadata_path}\n"
+                "Please rerun preprocess/preprocess.py to regenerate the packed dataset with metadata."
+            )
+
+        with np.load(self.metadata_path, allow_pickle=False) as metadata:
+            if "slice_patient_ids" not in metadata:
+                raise ValueError(
+                    f"Metadata file {self.metadata_path} is missing 'slice_patient_ids'. "
+                    "Please regenerate the packed dataset with the updated preprocessing script."
+                )
+            self.slice_patient_ids = np.asarray(metadata["slice_patient_ids"]).astype(str, copy=False)
+        if self.slice_patient_ids.ndim != 1:
+            raise ValueError(
+                f"'slice_patient_ids' must be a 1D array. Got shape {self.slice_patient_ids.shape} "
+                f"in {self.metadata_path}"
+            )
+        if len(self.slice_patient_ids) != self.n_total:
+            raise ValueError(
+                "Packed data and metadata length mismatch: "
+                f"{self.n_total} slices in {self.data_path} vs {len(self.slice_patient_ids)} patient entries "
+                f"in {self.metadata_path}"
+            )
+
+        unique_patient_ids = np.unique(self.slice_patient_ids)
+        if len(unique_patient_ids) == 0:
+            raise ValueError(f"No patient IDs found in metadata file: {self.metadata_path}")
+
+        # Split by unique patients so all slices from one patient stay together.
         rng = np.random.RandomState(self.seed)
-        idx = np.arange(self.n_total)
-        rng.shuffle(idx)
+        patient_ids = unique_patient_ids.copy()
+        rng.shuffle(patient_ids)
 
-        n_train = int(self.train_ratio * self.n_total)
-        n_val = int(self.val_ratio * self.n_total)
-
-        train_idx = idx[:n_train]
-        val_idx = idx[n_train:n_train + n_val]
-        test_idx = idx[n_train + n_val:]
+        n_train = int(self.train_ratio * len(patient_ids))
+        n_val = int(self.val_ratio * len(patient_ids))
 
         if split == "train":
-            self.indices = train_idx
+            selected_patient_ids = patient_ids[:n_train]
         elif split == "val":
-            self.indices = val_idx
+            selected_patient_ids = patient_ids[n_train:n_train + n_val]
         else:
-            self.indices = test_idx
+            selected_patient_ids = patient_ids[n_train + n_val:]
+
+        self.indices = np.flatnonzero(np.isin(self.slice_patient_ids, selected_patient_ids))
 
     def __len__(self) -> int:
         return int(len(self.indices))
