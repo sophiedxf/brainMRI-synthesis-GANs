@@ -402,7 +402,6 @@ def train(args):
                 progress_samples = G_progress(fixed_noise).cpu()
             progress_frame_path = os.path.join(progress_frames_dir, f"epoch_{epoch:04d}.png")
             save_sample_grid(progress_samples, progress_frame_path, nrow=args.sample_grid_nrow)
-            save_progress_animation_gif(progress_frames_dir, progress_gif_path)
 
         # Save samples every N epochs (use EMA generator if enabled)
         if epoch % args.save_samples_every == 0:
@@ -450,6 +449,7 @@ def train(args):
             f"time={elapsed:.1f}s"
         )
 
+    save_progress_animation_gif(progress_frames_dir, progress_gif_path)
     print("DCGAN training complete.")
 
 

@@ -222,6 +222,8 @@ python preprocess\preprocess.py ^
 
 **Saving / resume**
 - `--save_samples_every`: save a sample grid PNG every N epochs
+- `--save_progress_every`: save a fixed-noise progression frame every N epochs; `generator_progression.gif` is assembled after training finishes
+- `--progress_use_ema` / `--no_progress_use_ema`: choose whether the progression animation uses EMA G or raw G
 - `--save_ckpt_every`: save a checkpoint every N epochs
 - `--resume <checkpoint_path>`: resume training from a saved checkpoint
 
