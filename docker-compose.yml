@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  preprocess:
+    build:
+      context: .
+      dockerfile: preprocess/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_preprocess:latest
+    volumes:
+      - ./data:/app/data
+      - ./runs:/app/runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+
+  train_dcgan:
+    build:
+      context: .
+      dockerfile: train_dcgan/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_train_dcgan:latest
+    volumes:
+      - ./data:/app/data
+      - ./runs:/app/runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+
+  train_wgangp:
+    build:
+      context: .
+      dockerfile: train_wgangp/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_train_wgangp:latest
+    volumes:
+      - ./data:/app/data
+      - ./runs:/app/runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+
+  evaluate:
+    build:
+      context: .
+      dockerfile: evaluate/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_evaluate:latest
+    volumes:
+      - ./data:/app/data
+      - ./runs:/app/runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+
+  generate:
+    build:
+      context: .
+      dockerfile: generate/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_generate:latest
+    volumes:
+      - ./data:/app/data
+      - ./runs:/app/runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
