@@ -1,7 +1,6 @@
 import os
 import time
 import argparse
-from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -9,7 +8,6 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 
 import matplotlib.pyplot as plt
-from PIL import Image
 
 from dataset import BraTSSliceDataset
 from models_dcgan import DCGANGenerator, DCGANDiscriminator
@@ -61,7 +59,6 @@ CONFIG = {
     "save_ckpt_every": 10,
     "save_progress_every": 1,
     "progress_use_ema": True,
-    "progress_gif_filename": "generator_progression.gif",
 
     # Output files
     "loss_curve_filename": "loss_curves.png",
@@ -110,26 +107,6 @@ def ema_update(ema_model: torch.nn.Module, model: torch.nn.Module, beta: float):
     # Important for DCGAN because BatchNorm uses buffers (running_mean/var)
     for b_ema, b in zip(ema_model.buffers(), model.buffers()):
         b_ema.copy_(b)
-
-
-def save_progress_animation_gif(frames_dir: str, out_path: str, duration_ms: int = 800):
-    frame_paths = sorted(Path(frames_dir).glob("epoch_*.png"))
-    if len(frame_paths) == 0:
-        return
-
-    frames = [Image.open(p).convert("P", palette=Image.ADAPTIVE) for p in frame_paths]
-    first, rest = frames[0], frames[1:]
-    first.save(
-        out_path,
-        save_all=True,
-        append_images=rest,
-        duration=duration_ms,
-        loop=0,
-    )
-    for frame in frames:
-        frame.close()
-
-
 def parse_args():
     p = argparse.ArgumentParser()
 
@@ -223,7 +200,6 @@ def train(args):
     os.makedirs(args.out_dir, exist_ok=True)
     set_seed(args.seed)
     progress_frames_dir = os.path.join(args.out_dir, "progress_frames")
-    progress_gif_path = os.path.join(args.out_dir, CONFIG["progress_gif_filename"])
 
     # Dataset / loader
     ds = BraTSSliceDataset(
@@ -465,7 +441,6 @@ def train(args):
             f"time={elapsed:.1f}s"
         )
 
-    save_progress_animation_gif(progress_frames_dir, progress_gif_path)
     print("DCGAN training complete.")
 
 

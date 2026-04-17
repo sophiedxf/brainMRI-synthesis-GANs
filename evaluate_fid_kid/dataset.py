@@ -135,8 +135,8 @@ class BraTSSliceDataset(Dataset):
         idx = int(self.indices[i])
         arr = self._packed[idx]  # (H, W)
 
-        if arr.dtype != np.float32:
-            arr = arr.astype(np.float32, copy=False)
+        # Make a writable float32 copy so torch.from_numpy does not warn on read-only mmap slices.
+        arr = np.array(arr, dtype=np.float32, copy=True)
 
         x = torch.from_numpy(arr).unsqueeze(0)  # (1, H, W)
         return x

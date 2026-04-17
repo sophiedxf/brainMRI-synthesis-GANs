@@ -57,10 +57,12 @@ CONFIG = {
     "ema_start_epoch": 1,
 
     # Logging / saving cadence
-    "sample_grid_n": 64,
-    "sample_grid_nrow": 8,
+    "sample_grid_n": 16,
+    "sample_grid_nrow": 4,
     "save_samples_every": 10,
     "save_ckpt_every": 10,
+    "save_progress_every": 1,
+    "progress_use_ema": True,
 
     # Output files
     "loss_curve_filename": "loss_curves.png",
@@ -156,6 +158,9 @@ def parse_args():
     p.add_argument("--save_ckpt_every", type=int, default=CONFIG["save_ckpt_every"])
     p.add_argument("--sample_grid_n", type=int, default=CONFIG["sample_grid_n"])
     p.add_argument("--sample_grid_nrow", type=int, default=CONFIG["sample_grid_nrow"])
+    p.add_argument("--save_progress_every", type=int, default=CONFIG["save_progress_every"])
+    p.add_argument("--progress_use_ema", action="store_true", default=CONFIG["progress_use_ema"])
+    p.add_argument("--no_progress_use_ema", action="store_true", default=False, help="Use raw G instead of EMA for progression frames")
 
     # Resume
     p.add_argument("--resume", type=str, default="", help="Path to checkpoint_epoch_XXXX.pt to resume from")
@@ -181,6 +186,8 @@ def train(args):
         raise ValueError(f"--image_size must be one of {sorted(VALID_IMAGE_SIZES)}")
     if args.gp_every < 1:
         raise ValueError("--gp_every must be >= 1")
+    if args.save_progress_every < 1:
+        raise ValueError("--save_progress_every must be >= 1")
     if args.train_ratio <= 0 or args.train_ratio >= 1:
         raise ValueError("--train_ratio must be in (0,1)")
     if args.val_ratio < 0 or args.val_ratio >= 1:
@@ -201,6 +208,7 @@ def train(args):
 
     os.makedirs(args.out_dir, exist_ok=True)
     set_seed(args.seed)
+    progress_frames_dir = os.path.join(args.out_dir, "progress_frames")
 
     # Dataset / loader
     ds = BraTSSliceDataset(
@@ -385,6 +393,16 @@ def train(args):
         # Save loss curves every 10 epochs (and at start_epoch)
         if (epoch % 10 == 0) or (epoch == start_epoch):
             save_loss_curves(args.out_dir, epoch_list, lossC_hist, lossG_hist, CONFIG["loss_curve_filename"])
+
+        if (epoch % args.save_progress_every) == 0:
+            G_progress = G
+            if (not args.no_progress_use_ema) and args.progress_use_ema and args.ema and (G_ema is not None):
+                G_progress = G_ema
+            G_progress.eval()
+            with torch.no_grad():
+                progress_samples = G_progress(fixed_noise).cpu()
+            progress_frame_path = os.path.join(progress_frames_dir, f"epoch_{epoch:04d}.png")
+            save_sample_grid(progress_samples, progress_frame_path, nrow=args.sample_grid_nrow)
 
         # Save samples every N epochs (use EMA generator if enabled)
         if epoch % args.save_samples_every == 0:

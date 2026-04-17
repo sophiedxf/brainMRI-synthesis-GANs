@@ -67,8 +67,18 @@ train_wgangp/
   models_dcgan.py
   models_wgangp.py
 
-evaluate/
+evaluate_fid_kid/
   eval_fid.py
+  rank_checkpoints.py
+  Dockerfile
+
+evaluate_privacy/
+  privacy_audit.py
+  Dockerfile
+
+evaluate_progression_animation/
+  make_progress_animation.py
+  Dockerfile
 
 generate/
   generate.py
@@ -148,8 +158,16 @@ python train_dcgan\train_dcgan.py ^
 
 Notes:
 - `test_ratio` is the remainder: `1 - train_ratio - val_ratio`
-- DCGAN saves progression frames during training
-- `generator_progression.gif` is assembled after training finishes
+- DCGAN saves progression frames only
+- use `evaluate_progression_animation\make_progress_animation.py` to turn those frames into a GIF with adjustable speed and epoch labels
+
+Create the animation after training:
+
+```bat
+python evaluate_progression_animation\make_progress_animation.py ^
+  --frames_dir runs\dcgan_64\progress_frames ^
+  --duration_ms 800
+```
 
 ## Train WGAN-GP
 
@@ -172,21 +190,31 @@ python train_wgangp\train_wgangp.py ^
   --lambda_gp 10 ^
   --gp_every 2 ^
   --ema ^
-  --ema_beta 0.999
+  --ema_beta 0.999 ^
+  --save_progress_every 1
+```
+
+You can create a WGAN-GP animation the same way:
+
+```bat
+python evaluate_progression_animation\make_progress_animation.py ^
+  --frames_dir runs\wgangp_64\progress_frames ^
+  --duration_ms 800
 ```
 
 ## Evaluate
 
-`evaluate/eval_fid.py` computes **FID** and **KID** using TorchMetrics Inception-v3 features.
+`evaluate_fid_kid/eval_fid.py` computes **FID** and **KID** using TorchMetrics Inception-v3 features.
 
 Use the **same** `seed`, `train_ratio`, and `val_ratio` as training so the held-out test set matches.
 
 Example:
 
 ```bat
-python evaluate\eval_fid.py ^
+python evaluate_fid_kid\eval_fid.py ^
   --data_dir data\preprocessed_slices_64 ^
   --ckpt runs\dcgan_64\checkpoint_latest.pt ^
+  --split test ^
   --seed 42 ^
   --train_ratio 0.8 ^
   --val_ratio 0.1 ^
@@ -195,6 +223,64 @@ python evaluate\eval_fid.py ^
   --batch_size 32 ^
   --use_ema ^
   --kid_subset_size 1000
+```
+
+To compare multiple checkpoints and rank them:
+
+```bat
+python evaluate_fid_kid\rank_checkpoints.py ^
+  --ckpt_dir runs\dcgan_64 ^
+  --data_dir data\preprocessed_slices_64 ^
+  --split test ^
+  --seed 42 ^
+  --train_ratio 0.8 ^
+  --val_ratio 0.1 ^
+  --num_real 2000 ^
+  --num_fake 2000 ^
+  --batch_size 32 ^
+  --use_ema ^
+  --sort_by fid
+```
+
+Useful options:
+- use `--split val` if you want to rank checkpoints on the validation split instead of the test split
+- use `--epochs 50 80 100` to evaluate only selected epoch checkpoints
+- use `--checkpoint_names checkpoint_epoch_0050.pt checkpoint_latest.pt` to evaluate an explicit file list
+
+To audit memorization risk, compare generated images to nearest real train and held-out images:
+
+```bat
+python evaluate_privacy\privacy_audit.py ^
+  --ckpt runs\dcgan_64\t2f_image20k_epoch100\checkpoint_epoch_0080.pt ^
+  --data_dir data\preprocessed_slices_64 ^
+  --reference_split test ^
+  --seed 42 ^
+  --train_ratio 0.8 ^
+  --val_ratio 0.1 ^
+  --num_fake 2000 ^
+  --num_train_real 2000 ^
+  --num_reference_real 2000 ^
+  --batch_size 32 ^
+  --num_workers 0 ^
+  --use_ema
+```
+
+This saves a CSV, a short summary, and the most suspicious fake/train/reference triplets for manual inspection.
+The audit reports raw-pixel `L2`, raw-pixel cosine similarity, and Inception feature-space `L2` nearest-neighbor distances.
+
+## Docker-Ready Evaluation Folders
+
+The evaluation utilities are split into separate self-contained folders so each can be built into its own Docker image:
+- `evaluate_fid_kid`
+- `evaluate_privacy`
+- `evaluate_progression_animation`
+
+Examples:
+
+```bat
+docker build -t dcgan-fid evaluate_fid_kid
+docker build -t dcgan-privacy evaluate_privacy
+docker build -t dcgan-animation evaluate_progression_animation
 ```
 
 ## Generate Images
@@ -224,13 +310,6 @@ That means all slices from one patient go entirely into:
 - or test
 
 This avoids leakage between splits and makes evaluation more realistic.
-
-## Tips
-
-- Start with `64 x 64` before trying larger sizes
-- Use `t2f` first if you want a simple baseline
-- Do not judge GAN quality from loss curves alone; always inspect sample images
-- Early DCGAN samples often look noisy even when training is behaving normally
 
 ## Outputs
 

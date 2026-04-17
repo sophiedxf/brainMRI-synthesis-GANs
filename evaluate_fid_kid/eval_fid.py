@@ -9,12 +9,9 @@
 # Requirements:
 #   pip install torchmetrics[image] torch-fidelity
 #
-# Usage:
-#   python src\eval_fid_kid.py --data_dir data\preprocessed_slices_64 --ckpt runs\dcgan_64\checkpoint_latest.pt --num_real 2000 --num_fake 2000 --batch_size 32 --use_ema
-#
 
-import os
 import argparse
+import os
 from typing import Dict, Tuple
 
 import torch
@@ -28,9 +25,6 @@ from dataset import BraTSSliceDataset
 from models_dcgan import DCGANGenerator
 
 
-# -------------------------
-# helpers
-# -------------------------
 def get_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -50,10 +44,7 @@ def _infer_model_kwargs_from_ckpt(state: dict) -> Dict:
         ngf = cfg.get("ngf", 64)
     ngf = int(ngf)
 
-    # out_channels is 1 for your MRI slices
-    in_channels = cfg.get("in_channels", 1)
-    in_channels = int(in_channels)
-
+    in_channels = int(cfg.get("in_channels", 1))
     return dict(image_size=image_size, z_dim=z_dim, ngf=ngf, out_channels=in_channels)
 
 
@@ -74,7 +65,6 @@ def _load_generator_from_ckpt(
         chosen = "G_ema"
     else:
         G.load_state_dict(state["G"])
-        chosen = "G"
 
     G.eval()
     return G, image_size, z_dim, chosen
@@ -92,13 +82,11 @@ def _to_3ch_0_1(x: torch.Tensor) -> torch.Tensor:
     return x
 
 
-# -------------------------
-# main evaluation
-# -------------------------
 @torch.no_grad()
 def compute_fid_kid(
     ckpt_path: str,
     data_dir: str,
+    split: str,
     seed: int,
     train_ratio: float,
     val_ratio: float,
@@ -112,10 +100,9 @@ def compute_fid_kid(
 ) -> Dict:
     device = get_device()
 
-    # dataset (test split)
     ds_real = BraTSSliceDataset(
         data_dir,
-        split="test",
+        split=split,
         seed=seed,
         train_ratio=train_ratio,
         val_ratio=val_ratio,
@@ -130,17 +117,12 @@ def compute_fid_kid(
         persistent_workers=(num_workers > 0),
     )
 
-    # generator
     G, image_size, z_dim, chosen = _load_generator_from_ckpt(ckpt_path, device, use_ema)
 
-    # metrics
     fid = FrechetInceptionDistance(normalize=True).to(device)
-
-    # KID buffers features; subset_size must be <= both real and fake counts used
     kid_subset_size = int(min(kid_subset_size, num_real, num_fake))
     kid = KernelInceptionDistance(subset_size=kid_subset_size, normalize=True).to(device)
 
-    # ---- real updates ----
     seen = 0
     for x in dl_real:
         x = x.to(device, non_blocking=True)
@@ -151,7 +133,6 @@ def compute_fid_kid(
         if seen >= num_real:
             break
 
-    # ---- fake updates ----
     seen = 0
     while seen < num_fake:
         bsz = min(batch_size, num_fake - seen)
@@ -164,11 +145,10 @@ def compute_fid_kid(
 
     fid_score = float(fid.compute().item())
     kid_mean, kid_std = kid.compute()
-    kid_mean = float(kid_mean.item())
-    kid_std = float(kid_std.item())
 
     return {
         "ckpt": ckpt_path,
+        "split": split,
         "generator_used": chosen,
         "image_size": image_size,
         "z_dim": z_dim,
@@ -176,8 +156,8 @@ def compute_fid_kid(
         "num_fake": num_fake,
         "batch_size": batch_size,
         "fid": fid_score,
-        "kid_mean": kid_mean,
-        "kid_std": kid_std,
+        "kid_mean": float(kid_mean.item()),
+        "kid_std": float(kid_std.item()),
         "kid_subset_size": kid_subset_size,
     }
 
@@ -186,22 +166,17 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", type=str, required=True, help="Path to checkpoint (.pt)")
     p.add_argument("--data_dir", type=str, required=True, help="Directory containing packed dataset")
+    p.add_argument("--split", type=str, default="test", choices=["val", "test"], help="Real-data split used for evaluation")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--train_ratio", type=float, default=0.8)
     p.add_argument("--val_ratio", type=float, default=0.1)
     p.add_argument("--num_real", type=int, default=2000)
     p.add_argument("--num_fake", type=int, default=2000)
     p.add_argument("--batch_size", type=int, default=32)
-
-    # performance knobs
     p.add_argument("--num_workers", type=int, default=2)
     p.add_argument("--pin_memory", action="store_true", default=True)
-
-    # EMA
     p.add_argument("--use_ema", action="store_true", help="Use G_ema if present in checkpoint")
     p.add_argument("--no_ema", action="store_true", help="Force using raw G even if G_ema exists")
-
-    # KID
     p.add_argument("--kid_subset_size", type=int, default=1000, help="Subset size used by TorchMetrics KID")
 
     args = p.parse_args()
@@ -221,10 +196,12 @@ def main():
 
     print("Device:", get_device())
     print("Checkpoint:", args.ckpt)
+    print("Split:", args.split)
 
     out = compute_fid_kid(
         ckpt_path=args.ckpt,
         data_dir=args.data_dir,
+        split=args.split,
         seed=args.seed,
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
@@ -238,12 +215,13 @@ def main():
     )
 
     print(f"Generator used: {out['generator_used']}")
+    print(f"Evaluation split: {out['split']}")
     print(f"Image size: {out['image_size']} | z_dim: {out['z_dim']}")
     print(f"Real samples used: {out['num_real']} | Fake samples used: {out['num_fake']}")
     print(f"KID subset_size: {out['kid_subset_size']}")
     print("\n=== TorchMetrics Inception-v3 (ImageNet) ===")
     print(f"FID: {out['fid']:.4f}")
-    print(f"KID: {out['kid_mean']:.6f} ± {out['kid_std']:.6f}")
+    print(f"KID: {out['kid_mean']:.6f} +/- {out['kid_std']:.6f}")
     print("\nNote: Inception-based metrics are imperfect for MRIs; treat as relative metrics only.")
 
 

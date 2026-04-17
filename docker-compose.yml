@@ -49,11 +49,11 @@ services:
               count: 1
               capabilities: [ gpu ]
 
-  evaluate:
+  evaluate_fid_kid:
     build:
       context: .
-      dockerfile: evaluate/Dockerfile
-    image: ghcr.io/sydgep/docker-images/brats_evaluate:latest
+      dockerfile: evaluate_fid_kid/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_evaluate_fid_kid:latest
     volumes:
       - ./data:/app/data
       - ./runs:/app/runs
@@ -64,6 +64,30 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [ gpu ]
+
+  evaluate_privacy:
+    build:
+      context: .
+      dockerfile: evaluate_privacy/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_evaluate_privacy:latest
+    volumes:
+      - ./data:/app/data
+      - ./runs:/app/runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [ gpu ]
+
+  evaluate_progression_animation:
+    build:
+      context: .
+      dockerfile: evaluate_progression_animation/Dockerfile
+    image: ghcr.io/sydgep/docker-images/brats_evaluate_progression_animation:latest
+    volumes:
+      - ./runs:/app/runs
 
   generate:
     build:

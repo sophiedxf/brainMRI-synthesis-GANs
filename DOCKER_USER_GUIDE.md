@@ -32,12 +32,14 @@ docker run --rm [ --gpus all ] \
 
 ## 2. Docker Image Catalog
 
-These are the 5 independent images available for the modules:
+These are the independent images available for the modules:
 
 * `ghcr.io/sydgep/docker-images/brats_preprocess:latest`
 * `ghcr.io/sydgep/docker-images/brats_train_dcgan:latest`
 * `ghcr.io/sydgep/docker-images/brats_train_wgangp:latest`
-* `ghcr.io/sydgep/docker-images/brats_evaluate:latest`
+* `ghcr.io/sydgep/docker-images/brats_evaluate_fid_kid:latest`
+* `ghcr.io/sydgep/docker-images/brats_evaluate_privacy:latest`
+* `ghcr.io/sydgep/docker-images/brats_evaluate_progression_animation:latest`
 * `ghcr.io/sydgep/docker-images/brats_generate:latest`
 
 **Note:** If you run any of these images *without* any arguments, they will run a default example CMD (configured in the Dockerfile), but you can override the arguments by appending them to the inner `docker run` command.
@@ -124,11 +126,11 @@ docker run --rm --gpus all \
 
 ---
 
-## 6. Evaluate FID/KID (`evaluate`)
+## 6. Evaluate FID/KID (`evaluate_fid_kid`)
 
 Computes FID + KID using TorchMetrics Inception-v3 features.
 
-**Image**: `ghcr.io/sydgep/docker-images/brats_evaluate`
+**Image**: `ghcr.io/sydgep/docker-images/brats_evaluate_fid_kid`
 
 ### Example Command
 To evaluate the latest checkpoint using 2000 real and 2000 fake samples (using EMA weights):
@@ -136,8 +138,8 @@ To evaluate the latest checkpoint using 2000 real and 2000 fake samples (using E
 docker run -it --rm \
   -v ./data:/app/data \
   -v ./runs:/app/runs \
-  ghcr.io/sydgep/docker-images/brats_evaluate:latest \
-  python evaluate/eval_fid.py \
+  ghcr.io/sydgep/docker-images/brats_evaluate_fid_kid:latest \
+  python eval_fid.py \
     --data_dir data/preprocessed_slices_64 \
     --ckpt runs/wgangp_64/checkpoint_latest.pt \
     --num_real 2000 \
@@ -148,7 +150,51 @@ docker run -it --rm \
 
 ---
 
-## 7. Generate Images (`generate`)
+## 7. Evaluate Privacy (`evaluate_privacy`)
+
+Audits possible memorization by comparing fake images to nearest train and held-out real images.
+
+**Image**: `ghcr.io/sydgep/docker-images/brats_evaluate_privacy`
+
+### Example Command
+```bash
+docker run -it --rm \
+  -v ./data:/app/data \
+  -v ./runs:/app/runs \
+  ghcr.io/sydgep/docker-images/brats_evaluate_privacy:latest \
+  python privacy_audit.py \
+    --ckpt runs/dcgan_64/checkpoint_latest.pt \
+    --data_dir data/preprocessed_slices_64 \
+    --reference_split test \
+    --num_fake 2000 \
+    --num_train_real 2000 \
+    --num_reference_real 2000 \
+    --batch_size 32 \
+    --num_workers 0 \
+    --use_ema
+```
+
+---
+
+## 8. Create Progress Animation (`evaluate_progression_animation`)
+
+Builds a GIF from saved `progress_frames/epoch_XXXX.png` images.
+
+**Image**: `ghcr.io/sydgep/docker-images/brats_evaluate_progression_animation`
+
+### Example Command
+```bash
+docker run -it --rm \
+  -v ./runs:/app/runs \
+  ghcr.io/sydgep/docker-images/brats_evaluate_progression_animation:latest \
+  python make_progress_animation.py \
+    --frames_dir /app/runs/dcgan_64/progress_frames \
+    --duration_ms 800
+```
+
+---
+
+## 9. Generate Images (`generate`)
 
 Generates synthetic images from a checkpoint and optionally saves a grid PNG, individual PNGs, or a packed `.npy`.
 
