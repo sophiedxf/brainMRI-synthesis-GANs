@@ -45,7 +45,7 @@ def _load_subset_tensor(
     batch_size: int,
     num_workers: int,
     pin_memory: bool,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, np.ndarray]:
     dataset = BraTSSliceDataset(
         data_dir,
         split=split,
@@ -71,7 +71,9 @@ def _load_subset_tensor(
         chunks.append(batch.to(torch.float32))
     if not chunks:
         raise RuntimeError(f"No samples loaded for split '{split}'.")
-    return torch.cat(chunks, dim=0)
+
+    subset_patient_ids = dataset.slice_patient_ids[dataset.indices[subset_indices]]
+    return torch.cat(chunks, dim=0), subset_patient_ids
 
 
 def _generate_fake_tensor(
@@ -169,10 +171,17 @@ def _nearest_cosine(query: torch.Tensor, reference: torch.Tensor, chunk_size: in
     return torch.cat(max_sim), torch.cat(max_idx)
 
 
-def _train_self_nn_l2(train_real: torch.Tensor, chunk_size: int) -> torch.Tensor:
+def _train_self_nn_l2(
+    train_real: torch.Tensor,
+    train_patient_ids: np.ndarray,
+    chunk_size: int,
+) -> torch.Tensor:
     train_flat = _flatten(train_real)
     train_sq = (train_flat * train_flat).sum(dim=1).unsqueeze(0)
     train_t = train_flat.t()
+
+    if train_patient_ids.ndim != 1 or len(train_patient_ids) != train_flat.size(0):
+        raise ValueError("train_patient_ids must be a 1D array aligned with train_real.")
 
     mins = []
     for start in range(0, train_flat.size(0), chunk_size):
@@ -181,11 +190,19 @@ def _train_self_nn_l2(train_real: torch.Tensor, chunk_size: int) -> torch.Tensor
         dist = chunk_sq + train_sq - 2.0 * (chunk @ train_t)
         dist = dist.clamp_min_(0.0)
 
-        row_idx = torch.arange(dist.size(0))
-        col_idx = torch.arange(start, start + dist.size(0))
-        dist[row_idx, col_idx] = float("inf")
+        chunk_patient_ids = train_patient_ids[start:start + chunk.size(0)]
+        same_patient_mask = torch.from_numpy(
+            chunk_patient_ids[:, None] == train_patient_ids[None, :]
+        ).to(dtype=torch.bool, device=dist.device)
+        dist[same_patient_mask] = float("inf")
 
         best_dist, _ = torch.min(dist, dim=1)
+        if torch.isinf(best_dist).any():
+            raise RuntimeError(
+                "Could not compute cross-patient train baseline because at least one sampled "
+                "training slice has no slices from other patients in the reference pool. "
+                "Increase --num_train_real or use 0 to include all training slices."
+            )
         mins.append(best_dist.cpu())
     return torch.cat(mins)
 
@@ -326,7 +343,7 @@ def main():
     print("Checkpoint:", args.ckpt)
     print("Reference split:", args.reference_split)
 
-    train_real = _load_subset_tensor(
+    train_real, train_patient_ids = _load_subset_tensor(
         data_dir=args.data_dir,
         split="train",
         seed=args.seed,
@@ -337,7 +354,7 @@ def main():
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
     )
-    reference_real = _load_subset_tensor(
+    reference_real, _ = _load_subset_tensor(
         data_dir=args.data_dir,
         split=args.reference_split,
         seed=args.seed,
@@ -369,8 +386,16 @@ def main():
     train_feature_l2, train_feature_l2_idx = _nearest_l2(fake_features, train_features, chunk_size=args.chunk_size)
     ref_feature_l2, ref_feature_l2_idx = _nearest_l2(fake_features, reference_features, chunk_size=args.chunk_size)
 
-    train_self_l2 = _train_self_nn_l2(train_real, chunk_size=args.chunk_size)
-    train_self_feature_l2 = _train_self_nn_l2(train_features, chunk_size=args.chunk_size)
+    train_self_l2 = _train_self_nn_l2(
+        train_real,
+        train_patient_ids=train_patient_ids,
+        chunk_size=args.chunk_size,
+    )
+    train_self_feature_l2 = _train_self_nn_l2(
+        train_features,
+        train_patient_ids=train_patient_ids,
+        chunk_size=args.chunk_size,
+    )
 
     eps = 1e-8
     l2_gap = ref_l2 - train_l2
@@ -470,7 +495,7 @@ def main():
         f"mean_feature_l2_gap_reference_minus_train: {float(feature_l2_gap.mean()):.6f}",
         f"max_feature_l2_gap_reference_minus_train: {float(feature_l2_gap.max()):.6f}",
         "",
-        "Train-to-train baseline (sampled train pool)",
+        "Cross-patient train-to-train baseline (sampled train pool)",
         f"train_self_nn_l2_p01: {self_p01:.6f}",
         f"train_self_nn_l2_p05: {self_p05:.6f}",
         f"train_self_nn_l2_p10: {self_p10:.6f}",
@@ -478,7 +503,7 @@ def main():
         f"fraction_fake_below_train_self_p05: {float((train_l2 <= self_p05).float().mean()):.6f}",
         f"fraction_fake_below_train_self_p10: {float((train_l2 <= self_p10).float().mean()):.6f}",
         "",
-        "Feature-space train-to-train baseline",
+        "Feature-space cross-patient train-to-train baseline",
         f"train_self_feature_l2_p01: {self_feature_p01:.6f}",
         f"train_self_feature_l2_p05: {self_feature_p05:.6f}",
         f"train_self_feature_l2_p10: {self_feature_p10:.6f}",
@@ -488,7 +513,7 @@ def main():
         "",
         "Interpretation notes",
         "Lower fake-to-train distances can indicate memorization risk, especially when train matches are much closer than held-out matches.",
-        "The train-to-train baseline gives context: fake samples below the lowest train-to-train distances are more suspicious.",
+        "The cross-patient train-to-train baseline gives context: fake samples below the lowest cross-patient train-to-train distances are more suspicious.",
         "Feature-space distance is usually more meaningful than raw pixels for structural similarity, so it should carry more weight in your interpretation.",
         "This is an audit, not a formal privacy guarantee.",
     ]

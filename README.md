@@ -7,6 +7,7 @@ It includes:
 - patient-level train/val/test splitting
 - DCGAN and WGAN-GP training
 - FID/KID evaluation
+- Nearest neighbour test for privacy audit
 - image generation from trained checkpoints
 
 Supported image sizes:
@@ -247,7 +248,33 @@ Useful options:
 - use `--epochs 50 80 100` to evaluate only selected epoch checkpoints
 - use `--checkpoint_names checkpoint_epoch_0050.pt checkpoint_latest.pt` to evaluate an explicit file list
 
-To audit memorization risk, compare generated images to nearest real train and held-out images:
+To compute a real-data baseline between dataset splits instead of generator-vs-real:
+
+```bat
+python evaluate_fid_kid\eval_fid.py ^
+  --real_vs_real ^
+  --data_dir data\preprocessed_slices_64 ^
+  --split_a train ^
+  --split_b test ^
+  --seed 42 ^
+  --train_ratio 0.8 ^
+  --val_ratio 0.1 ^
+  --num_real 2000 ^
+  --num_fake 2000 ^
+  --batch_size 32 ^
+  --kid_subset_size 1000
+```
+
+## Privacy Evaluation
+
+`evaluate_privacy/privacy_audit.py` performs a **memorisation-risk audit** using nearest-neighbor comparisons.
+
+It does three comparisons for each generated image:
+- nearest training image
+- nearest held-out real image from `val` or `test`
+- cross-patient train-to-train baseline for context
+
+Example:
 
 ```bat
 python evaluate_privacy\privacy_audit.py ^
@@ -265,8 +292,26 @@ python evaluate_privacy\privacy_audit.py ^
   --use_ema
 ```
 
-This saves a CSV, a short summary, and the most suspicious fake/train/reference triplets for manual inspection.
-The audit reports raw-pixel `L2`, raw-pixel cosine similarity, and Inception feature-space `L2` nearest-neighbor distances.
+Outputs:
+- `privacy_audit.csv` with one row per generated image
+- `summary.txt` with aggregate statistics and interpretation notes
+- `suspicious_examples/` containing fake / nearest-train / nearest-reference triplets for manual inspection
+
+The audit reports:
+- raw-pixel `L2` nearest-neighbor distance
+- raw-pixel cosine similarity
+- Inception feature-space `L2` nearest-neighbor distance
+
+Useful summary fields:
+- `fraction_train_closer_l2`: fraction of fake images whose nearest training image is closer than their nearest held-out image
+- `fraction_train_closer_feature_l2`: same idea in Inception feature space
+- `train_self_nn_l2_p01`, `p05`, `p10`: the 1st, 5th, and 10th percentiles of the cross-patient train-to-train nearest-neighbor distance distribution
+- `fraction_fake_below_train_self_p01`, `p05`, `p10`: fraction of fake images whose nearest-train distance is at or below those baseline thresholds
+
+Interpretation:
+- if train matches are consistently much closer than held-out matches, memorization risk is higher
+- feature-space distance is usually more informative than raw-pixel distance for structural similarity
+- this audit is a useful warning signal, not a formal privacy guarantee
 
 ## Docker-Ready Evaluation Folders
 
