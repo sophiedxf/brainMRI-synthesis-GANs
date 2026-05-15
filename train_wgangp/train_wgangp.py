@@ -7,6 +7,8 @@ import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from dataset import BraTSSliceDataset

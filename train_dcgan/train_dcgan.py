@@ -7,6 +7,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from dataset import BraTSSliceDataset
@@ -172,6 +174,14 @@ def _warn_if_mismatch(args, ckpt: dict):
     _cmp("ndf", args.ndf, ckpt.get("ndf", None))
 
 
+def _apply_optimizer_hparams(optimizer: optim.Optimizer, lr: float, beta1: float, beta2: float):
+    optimizer.defaults["lr"] = lr
+    optimizer.defaults["betas"] = (beta1, beta2)
+    for group in optimizer.param_groups:
+        group["lr"] = lr
+        group["betas"] = (beta1, beta2)
+
+
 def train(args):
     if args.image_size not in VALID_IMAGE_SIZES:
         raise ValueError(f"--image_size must be one of {sorted(VALID_IMAGE_SIZES)}")
@@ -215,10 +225,10 @@ def train(args):
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
-        pin_memory_device="cuda" if torch.cuda.is_available() else "",
+        pin_memory_device="cuda" if (args.pin_memory and torch.cuda.is_available()) else "",
         drop_last=True,
         persistent_workers=(args.num_workers > 0),
-        prefetch_factor=4,
+        prefetch_factor=4 if args.num_workers > 0 else None,
     )
 
     # Models
@@ -281,6 +291,10 @@ def train(args):
             optG.load_state_dict(ckpt["optG"])
         if "optD" in ckpt:
             optD.load_state_dict(ckpt["optD"])
+
+        # Allow fine-tuning from a checkpoint with new optimizer hyperparameters.
+        _apply_optimizer_hparams(optG, lr=args.lrG, beta1=args.beta1, beta2=args.beta2)
+        _apply_optimizer_hparams(optD, lr=args.lrD, beta1=args.beta1, beta2=args.beta2)
 
         if "lossD_hist" in ckpt:
             lossD_hist = list(ckpt["lossD_hist"])
