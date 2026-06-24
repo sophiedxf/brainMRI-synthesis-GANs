@@ -1,16 +1,13 @@
-FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-devel
+FROM pytorch/pytorch:2.7.1-cuda11.8-cudnn9-runtime
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV TZ=Etc/UTC
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-WORKDIR /app
+WORKDIR /app/train_dcgan
 
-# The context should be the root of the repo
-COPY train_dcgan/requirements.txt ./
+COPY train_dcgan/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+COPY train_dcgan/ .
 
-# Default command from README
-# Mappings will be expected as volumes: -v ./data:/app/data -v ./runs:/app/runs
-CMD ["python", "train_dcgan/train_dcgan.py", "--data_dir", "data/preprocessed_slices_64", "--out_dir", "runs/dcgan_64", "--image_size", "64", "--batch_size", "128", "--epochs", "100", "--lrG", "4e-4", "--lrD", "2e-4", "--use_amp", "--ema", "--ema_beta", "0.999"]
+CMD ["python", "train_dcgan.py", "--data_dir", "/app/data/preprocessed_slices_64", "--out_dir", "/app/runs/dcgan_64", "--image_size", "64", "--batch_size", "128", "--epochs", "100", "--lrG", "4e-4", "--lrD", "2e-4", "--use_amp", "--ema", "--ema_beta", "0.999"]
