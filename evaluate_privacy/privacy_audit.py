@@ -214,6 +214,42 @@ def _to_uint8_image(x: torch.Tensor) -> Image.Image:
     return Image.fromarray(arr, mode="L")
 
 
+def _load_font(size: int, bold: bool = False):
+    candidates = [
+        "arialbd.ttf" if bold else "arial.ttf",
+        "DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf",
+    ]
+    for name in candidates:
+        try:
+            return ImageFont.truetype(name, size=size)
+        except OSError:
+            pass
+    return ImageFont.load_default()
+
+
+def _text_size(draw, text: str, font) -> tuple[int, int]:
+    bbox = draw.textbbox((0, 0), text, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
+def _wrap_text(draw, text: str, font, max_width: int) -> list[str]:
+    words = text.split()
+    if not words:
+        return [""]
+
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        trial = f"{current} {word}"
+        if _text_size(draw, trial, font)[0] <= max_width:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines
+
+
 def _save_triplet_image(
     out_path: str,
     fake_img: torch.Tensor,
@@ -222,27 +258,63 @@ def _save_triplet_image(
     caption: str,
 ):
     tiles = [
-        ("fake", _to_uint8_image(fake_img)),
-        ("nearest_train", _to_uint8_image(train_img)),
-        ("nearest_ref", _to_uint8_image(ref_img)),
+        ("Fake", _to_uint8_image(fake_img)),
+        ("Nearest train", _to_uint8_image(train_img)),
+        ("Nearest held-out real", _to_uint8_image(ref_img)),
     ]
 
-    pad = 12
-    top_h = 34
-    tile_w, tile_h = tiles[0][1].size
-    canvas_w = len(tiles) * tile_w + (len(tiles) + 1) * pad
-    canvas_h = tile_h + top_h + 2 * pad + 20
+    label_font = _load_font(18, bold=True)
+    caption_font = _load_font(16)
 
-    canvas = Image.new("L", (canvas_w, canvas_h), color=255)
+    tile_w, tile_h = tiles[0][1].size
+    display_size = max(160, min(256, max(tile_w, tile_h)))
+    margin = 36
+    gap = 32
+    label_h = 28
+    tile_pad = 10
+    caption_gap = 24
+    line_gap = 6
+    border = 1
+
+    canvas_w = max(720, len(tiles) * display_size + (len(tiles) - 1) * gap + 2 * margin)
+    measure_canvas = Image.new("RGB", (canvas_w, 10), color="white")
+    measure_draw = ImageDraw.Draw(measure_canvas)
+    caption_lines = _wrap_text(measure_draw, caption, caption_font, canvas_w - 2 * margin)
+    caption_line_h = _text_size(measure_draw, "Ag", caption_font)[1]
+    caption_h = len(caption_lines) * caption_line_h + max(0, len(caption_lines) - 1) * line_gap
+
+    canvas_h = margin + label_h + display_size + caption_gap + caption_h + margin
+    canvas = Image.new("RGB", (canvas_w, canvas_h), color=(248, 248, 248))
     draw = ImageDraw.Draw(canvas)
 
-    for idx, (label, image) in enumerate(tiles):
-        x = pad + idx * (tile_w + pad)
-        y = top_h
-        canvas.paste(image, (x, y))
-        draw.text((x, 8), label, fill=0)
+    group_w = len(tiles) * display_size + (len(tiles) - 1) * gap
+    start_x = (canvas_w - group_w) // 2
+    tile_y = margin + label_h
 
-    draw.text((pad, canvas_h - 18), caption[:140], fill=0)
+    for idx, (label, image) in enumerate(tiles):
+        x = start_x + idx * (display_size + gap)
+        label_w, _ = _text_size(draw, label, label_font)
+        draw.text((x + (display_size - label_w) // 2, margin), label, fill=(20, 20, 20), font=label_font)
+
+        panel = Image.new("RGB", (display_size + 2 * tile_pad, display_size + 2 * tile_pad), color=(255, 255, 255))
+        image = image.resize((display_size, display_size), resample=Image.Resampling.BICUBIC).convert("RGB")
+        panel.paste(image, (tile_pad, tile_pad))
+
+        panel_x = x - tile_pad
+        panel_y = tile_y - tile_pad
+        canvas.paste(panel, (panel_x, panel_y))
+        draw.rectangle(
+            [panel_x, panel_y, panel_x + panel.size[0] - 1, panel_y + panel.size[1] - 1],
+            outline=(215, 215, 215),
+            width=border,
+        )
+
+    caption_y = tile_y + display_size + caption_gap
+    for line in caption_lines:
+        line_w, _ = _text_size(draw, line, caption_font)
+        draw.text(((canvas_w - line_w) // 2, caption_y), line, fill=(35, 35, 35), font=caption_font)
+        caption_y += caption_line_h + line_gap
+
     canvas.save(out_path)
 
 
@@ -304,13 +376,13 @@ def parse_args():
 
 
 def _lazy_imports():
-    global np, torch, Image, ImageDraw, DataLoader, Subset
+    global np, torch, Image, ImageDraw, ImageFont, DataLoader, Subset
     global BraTSSliceDataset, _load_generator_from_ckpt, get_device
     global FeatureExtractorInceptionV3
 
     import numpy as np
     import torch
-    from PIL import Image, ImageDraw
+    from PIL import Image, ImageDraw, ImageFont
     from torch.utils.data import DataLoader, Subset
     from torch_fidelity.feature_extractor_inceptionv3 import FeatureExtractorInceptionV3
 
